@@ -1,0 +1,27 @@
+{
+  "name": "ai-phishdetect-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "react": "18.2.0",
+    "react-dom": "18.2.0",
+    "react-router-dom": "6.14.1",
+    "react-hot-toast": "2.4.0",
+    "lucide-react": "0.268.0"
+  },
+  "devDependencies": {
+    "typescript": "5.x",
+    "vite": "5.x",
+    "@types/react": "18.x",
+    "@types/react-dom": "18.x",
+    "tailwindcss": "3.x",
+    "postcss": "8.x",
+    "autoprefixer": "10.x",
+    "@vitejs/plugin-react": "4.x"
+  }
+}

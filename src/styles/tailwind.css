@@ -1,0 +1,22 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html, body, #root {
+  height: 100%;
+}
+
+/* Dark theme base */
+:root {
+  --bg: #0f1724;
+}
+
+.dark {
+  background-color: var(--bg);
+}
+
+/* Custom enterprise tones */
+.bg-gradient-alert {
+  background: linear-gradient(90deg, #ff6b6b, #ff8a3d);
+}
+
