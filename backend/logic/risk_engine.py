@@ -11,24 +11,26 @@ class RiskEngine:
         self.vision = VisionAnalyzer()
 
     def analyze(self, text: str, urls: list, images_b64: list):
-        # 1. NLP
+        # 1. NLP Analysis
         nlp_res = self.nlp.analyze(text)
-        nlp_score = nlp_res['score']
+        nlp_score = nlp_res['score'] # Assumed 0-100
         factors = nlp_res['reasons'][:]
 
-        # 2. URL
+        # 2. URL Analysis
         url_scores = []
-        # If URLs are passed explicitly, use them. Else extraction happens in backend (but here we assume extract happened before or we do it here)
-        # Note: app.py handles extraction.
         
+        # Analyze explicit URLs
         for u in urls:
             u_res = self.url.analyze(u)
             url_scores.append(u_res['score'])
             factors.extend(u_res['reasons'])
+            
+        # Also analyze URLs extracted from text if not redundant? 
+        # app.py already merges them. 
         
         url_score = max(url_scores) if url_scores else 0.0
 
-        # 3. Vision
+        # 3. Vision Analysis
         vision_scores = []
         for img in images_b64:
             v_res = self.vision.analyze(img)
@@ -37,39 +39,36 @@ class RiskEngine:
         
         vision_score = max(vision_scores) if vision_scores else 0.0
 
-        # 4. Unified Scoring Logic
-        # New weighted logic: URL is highest risk, then NLP, then Vision is supplementary
-        # If ANY channel is Critical (>0.9), the whole Global score boosts up.
+        # 4. Unified Risk Score Calculation
+        # Formula: (NLP * 0.5) + (URL * 0.3) + (Vision * 0.2)
         
-        weights = {'nlp': 0.4, 'url': 0.5, 'vision': 0.1}
+        # Ensure inputs are 0-100. My refactored modules return 0-100.
         
-        # Adaptive weights: If URL is 0 risk, rely more on NLP
-        if url_score == 0 and vision_score == 0:
-            weights = {'nlp': 1.0, 'url': 0.0, 'vision': 0.0}
-        elif nlp_score == 0 and url_score > 0:
-            weights = {'nlp': 0.0, 'url': 0.9, 'vision': 0.1}
-
-        risk_score = (nlp_score * weights['nlp']) + (url_score * weights['url']) + (vision_score * weights['vision'])
-
-        # Critical Overrides
-        if url_score > 0.9:
-            risk_score = max(risk_score, 0.95)
-            factors.append("CRITICAL: Known malicious URL pattern detected")
+        # Calculate Weighted Score
+        raw_risk = (nlp_score * 0.5) + (url_score * 0.3) + (vision_score * 0.2)
         
-        if nlp_score > 0.9:
-             risk_score = max(risk_score, 0.90)
+        # Critical Overrides (High Confidence Signals)
+        # If URL is definitely malicious (score 100), the risk should be very high regardless of NLP/Vision
+        if url_score >= 90:
+             raw_risk = max(raw_risk, 90)
+        
+        if nlp_score >= 90:
+             raw_risk = max(raw_risk, 85)
 
-        # 5. Final Factor Cleanup
-        if risk_score < 0.1:
-            factors.append("No significant threats detected")
-        elif risk_score > 0.8:
-            factors.append("Target is HIGH RISK based on composite analysis")
+        risk_score = min(max(raw_risk, 0), 100)
+
+        # 5. Explanations / Verdict
+        # Dedup factors
+        unique_factors = list(set(factors))
+        
+        # Identify Warnings (High priority factors)
+        warnings = [f for f in unique_factors if "suspicious" in f.lower() or "critical" in f.lower() or "detected" in f.lower()]
 
         return {
             "risk_score": float(risk_score),
             "nlp_score": float(nlp_score),
             "url_score": float(url_score),
             "vision_score": float(vision_score),
-            "factors": list(set(factors)), # dedup
-            "warnings": [f for f in factors if "CRITICAL" in f or "Suspicious" in f]
+            "factors": unique_factors,
+            "warnings": warnings 
         }

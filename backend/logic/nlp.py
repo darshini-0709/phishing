@@ -1,81 +1,117 @@
 
 import logging
-import torch
-from transformers import pipeline
+import os
+import pickle
 import re
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
 class NLPAnalyzer:
     def __init__(self):
-        self.pipeline = None
-        self.device = 0 if torch.cuda.is_available() else -1
-        try:
-            # Using a tiny BERT model fine-tuned for spam detection for speed and efficiency
-            # Fallback to a lightweight model if this specific one isn't desired, but this is a real model.
-            logger.info("Loading NLP model (bert-tiny-finetuned-sms-spam-detection)...")
-            self.pipeline = pipeline("text-classification", model="mrm8488/bert-tiny-finetuned-sms-spam-detection", device=self.device)
-            logger.info("NLP model loaded successfully.")
-        except Exception as e:
-            logger.error(f"Failed to load NLP model: {e}")
-            self.pipeline = None
+        self.model = None
+        self.vectorizer = None
+        self._load_models()
 
-        # Heuristic keywords for explainability
-        self.urgency_words = ["urgent", "identify", "immediately", "suspended", "lock", "verify"]
-        self.financial_words = ["bank", "credit", "card", "payment", "btc", "bitcoin", "invoice"]
-        self.fear_words = ["warrant", "arrest", "lawsuit", "police", "legal"]
+        # 2. Psychological Manipulation Detection (Rule-based)
+        self.urgency_patterns = [
+            r"urgent", r"immediately", r"now", r"limited time", r"24 hours", 
+            r"act fast", r"immediate action", r"expires", r"deadline"
+        ]
+        self.fear_patterns = [
+            r"suspended", r"blocked", r"unusual activity", r"unauthorized", 
+            r"legal action", r"warrant", r"arrest", r"terminated", r"breach"
+        ]
+        self.authority_patterns = [
+            r"admin", r"support team", r"security department", r"verification center",
+            r"bank", r"irs", r"tax", r"ceo", r"hr department"
+        ]
+        self.action_requests = [
+            r"click here", r"verify", r"confirm", r"update your", 
+            r"sign in", r"log in", r"reply", r"download"
+        ]
+
+    def _load_models(self):
+        base_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        model_path = os.path.join(base_path, "models", "email_model.pkl")
+        vectorizer_path = os.path.join(base_path, "models", "email_vectorizer.pkl")
+
+        try:
+            if os.path.exists(model_path) and os.path.exists(vectorizer_path):
+                logger.info("Loading local NLP models...")
+                with open(model_path, "rb") as f:
+                    self.model = pickle.load(f)
+                with open(vectorizer_path, "rb") as f:
+                    self.vectorizer = pickle.load(f)
+                logger.info("Local NLP models loaded successfully.")
+            else:
+                logger.error(f"Model files not found at {model_path} or {vectorizer_path}")
+        except Exception as e:
+            logger.error(f"Failed to load NLP models: {e}")
 
     def analyze(self, text: str):
+        scores = []
+        reasons = []
+        
         if not text:
             return {"score": 0.0, "reasons": []}
 
-        score = 0.0
-        reasons = []
-
-        # 1. Transformer Prediction
-        if self.pipeline:
+        # 1. NLP Model Prediction
+        nlp_prob = 0.0
+        if self.model and self.vectorizer:
             try:
-                # Truncate text to 512 chars to prevent model crash
-                prediction = self.pipeline(text[:512])[0]
-                # Label is typically LABEL_0 (Ham) or LABEL_1 (Spam) or 'HAM'/'SPAM' depending on model config
-                # For this specific model: LABEL_1 = Spam
-                label = prediction['label']
-                raw_score = prediction['score']
+                # Vectorize
+                features = self.vectorizer.transform([text])
+                # Predict probability (class 1 assumed to be phishing/spam)
+                nlp_prob = self.model.predict_proba(features)[0][1]
                 
-                if label in ['LABEL_1', 'SPAM', 'Spam']:
-                    score = raw_score
-                    reasons.append(f"AI Model detected spam patterns ({int(raw_score*100)}% confidence)")
-                else:
-                    # It's Ham, but maybe low confidence?
-                    # If it's confidently ham, score remains 0.
-                    pass
+                # Format explanation
+                if nlp_prob > 0.5:
+                    reasons.append(f"AI Model analysis detected suspicious patterns ({int(nlp_prob*100)}% confidence)")
             except Exception as e:
-                logger.error(f"NLP prediction error: {e}")
-                pass
+                logger.error(f"Prediction error: {e}")
+                
+        scores.append(nlp_prob * 100) # Base score on 0-100 scale
 
-        # 2. Heuristic augmentation (Transformer + Rules = Hybrid better detection)
+        # 2. Key/Rule-based Detection
         lower_text = text.lower()
         
-        urgency_count = sum(1 for w in self.urgency_words if w in lower_text)
-        if urgency_count > 0:
-            boost = min(urgency_count * 0.1, 0.3)
-            score = max(score, 0.3) + boost
-            reasons.append("Use of urgent/threatening language")
+        # Urgency
+        if self._check_patterns(lower_text, self.urgency_patterns):
+            scores.append(85) # High impact
+            reasons.append("Urgency language detected (pressure to act)")
 
-        financial_count = sum(1 for w in self.financial_words if w in lower_text)
-        if financial_count > 0:
-            score += 0.15
-            reasons.append("Financial request or terminology detected")
+        # Fear / Threats
+        if self._check_patterns(lower_text, self.fear_patterns):
+            scores.append(90) # Very high impact
+            reasons.append("Fear/Threat language detected (account suspended/legal)")
 
-        fear_count = sum(1 for w in self.fear_words if w in lower_text)
-        if fear_count > 0:
-            score += 0.2
-            reasons.append("Legal or authoritarian threats detected")
+        # Authority
+        if self._check_patterns(lower_text, self.authority_patterns):
+            scores.append(60)
+            reasons.append("Authority impersonation detected")
+            
+        # Action Requests
+        if self._check_patterns(lower_text, self.action_requests):
+            scores.append(50)
+            reasons.append("High-risk action request detected (click/verify)")
 
-        # Clamp score
-        score = min(score, 0.99)
+        # Aggregate Score
+        # If we have model score, weight it heavily, but rules boost it.
+        # Simple max strategy or weighted average?
+        # Let's take the MAX of model score and rule usage to be safe (if model misses but rules hit).
+        final_score = max(scores) if scores else 0.0
+        
+        # Ensure rules increase the NLP score if model was low but rules found something
+        # If model says 0.2 but we have urgency, we want score to be higher.
         
         return {
-            "score": score,
+            "score": float(final_score), # 0-100
             "reasons": reasons
         }
+
+    def _check_patterns(self, text, patterns):
+        for p in patterns:
+            if re.search(p, text):
+                return True
+        return False
